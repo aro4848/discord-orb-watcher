@@ -1,0 +1,5 @@
+{
+  "token": "YOUR_DISCORD_USER_TOKEN_HERE",
+  "auto_claim": true,
+  "simulate_cdn_buffer": true
+}
