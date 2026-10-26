@@ -1,6 +1,7 @@
 # discord-orb-watcher
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/Version-1.1.0-green)](https://github.com/aro4848/discord-orb-watcher)
 [![Discord](https://img.shields.io/badge/Discord-aro22-7289DA)](https://discord.com/users/aro22)
 [![GitHub Stars](https://img.shields.io/github/stars/aro4848/discord-orb-watcher?style=flat-square)](https://github.com/aro4848/discord-orb-watcher)
 
