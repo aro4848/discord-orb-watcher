@@ -1,5 +1,10 @@
 {
   "token": "YOUR_DISCORD_USER_TOKEN_HERE",
   "auto_claim": true,
-  "simulate_cdn_buffer": true
+  "simulate_cdn_buffer": true,
+  "captcha_service": "auto",
+  "yescaptcha_key": "YOUR_YESCAPTCHA_CLIENT_KEY",
+  "capsolver_key": "YOUR_CAPSOLVER_API_KEY",
+  "2captcha_key": "YOUR_2CAPTCHA_API_KEY",
+  "anticaptcha_key": "YOUR_ANTICAPTCHA_API_KEY"
 }

@@ -73,15 +73,28 @@ python main.py --list
 
 if discord desktop is logged in on your windows pc, you don't even need a `config.json` — it detects your active session automatically.
 
-if you run on linux/vps or want to specify a custom token, copy `config.example.json` to `config.json`:
+if you run on linux/vps, want a custom token, or want auto-captcha solving, copy `config.example.json` to `config.json`:
 
 ```json
 {
   "token": "YOUR_DISCORD_USER_TOKEN",
   "auto_claim": true,
-  "simulate_cdn_buffer": true
+  "simulate_cdn_buffer": true,
+  "captcha_service": "auto",
+  "yescaptcha_key": "",
+  "capsolver_key": "",
+  "2captcha_key": "",
+  "anticaptcha_key": ""
 }
 ```
+
+### auto-captcha solving (optional)
+
+if discord challenges your account with an enterprise hCaptcha during quest enrollment or reward claiming, the script can auto-solve it in the background:
+
+- **supported solvers**: `yescaptcha`, `capsolver`, `2captcha`, `anticaptcha`
+- **safe**: 100% safe — zero tokens, passwords, or account info are ever sent to the captcha provider. only the public sitekey and dynamic challenge payload (`rqdata`) are dispatched.
+- **auto routing**: set `"captcha_service": "auto"` and paste whichever key you have. it will auto-detect and use your active provider.
 
 ### disclaimer
 

@@ -514,52 +514,194 @@ class StealthDiscordClient:
         res.raise_for_status()
 
 
-def get_captcha_api_key() -> str:
-    """Finds the 2Captcha API key from configuration or environment."""
+def get_captcha_config() -> dict:
+    """Finds captcha configuration from config files or environment."""
     candidates = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json"),
-        r"C:\Users\PC\Desktop\Discord id scraper\config.json",
-        r"C:\Users\PC\Downloads\cradleKoi-main\cradleKoi-main\config.json",
-        "config.json"
+        "config.json",
+        "orb_config.json"
     ]
+    cfg = {}
     for p in candidates:
         if os.path.exists(p):
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-                    k = cfg.get("captcha_api_key") or cfg.get("2captcha_key") or cfg.get("captcha_key")
-                    if k:
-                        return str(k).strip()
+                    if any(k in cfg for k in ("yescaptcha_key", "capsolver_key", "2captcha_key", "anticaptcha_key", "captcha_api_key", "captcha_key")):
+                        break
             except Exception:
                 pass
-    return "c7d4accb8b183aff4e0969b0cfb7e9a6"
 
+    service = str(cfg.get("captcha_service", "auto")).lower().strip()
+    yes_key = cfg.get("yescaptcha_key") or os.getenv("YESCAPTCHA_KEY") or ""
+    cap_key = cfg.get("capsolver_key") or os.getenv("CAPSOLVER_KEY") or ""
+    anti_key = cfg.get("anticaptcha_key") or os.getenv("ANTICAPTCHA_KEY") or ""
+    twoc_key = cfg.get("2captcha_key") or cfg.get("captcha_api_key") or cfg.get("captcha_key") or os.getenv("TWOCAPTCHA_KEY") or ""
 
-def solve_discord_hcaptcha(captcha_details: dict, user_agent: str = None) -> tuple:
-    """
-    Solves Discord's enterprise hCaptcha challenge using 2Captcha API (v2 createTask or fallback).
-    Returns (captcha_key, captcha_rqtoken).
-    """
-    api_key = get_captcha_api_key()
-    if not api_key:
-        print(f"  {Colors.RED}[!] No 2Captcha API key configured.{Colors.RESET}")
-        return None, None
+    if not any([yes_key, cap_key, anti_key, twoc_key]):
+        twoc_key = "c7d4accb8b183aff4e0969b0cfb7e9a6"
 
-    sitekey = (
-        captcha_details.get("captcha_sitekey")
-        or captcha_details.get("sitekey")
-        or "4c672d35-0701-42b2-88c3-78380b0db560"
-    )
-    rqdata = captcha_details.get("captcha_rqdata") or captcha_details.get("rqdata")
-    rqtoken = captcha_details.get("captcha_rqtoken") or captcha_details.get("rqtoken")
+    return {
+        "service": service,
+        "yescaptcha_key": str(yes_key).strip(),
+        "capsolver_key": str(cap_key).strip(),
+        "anticaptcha_key": str(anti_key).strip(),
+        "2captcha_key": str(twoc_key).strip(),
+    }
 
-    print(f"  {Colors.YELLOW}[*] Discord Captcha challenge detected! Dispatching to 2Captcha...{Colors.RESET}")
-    print(f"      Sitekey: {sitekey}")
-    if rqdata:
-        print(f"      Enterprise RQData payload detected: {rqdata[:20]}...")
+def get_captcha_api_key() -> str:
+    """Legacy helper for backwards-compatibility."""
+    cfg = get_captcha_config()
+    return cfg["yescaptcha_key"] or cfg["capsolver_key"] or cfg["2captcha_key"] or cfg["anticaptcha_key"]
 
+def solve_yescaptcha(api_key: str, sitekey: str, rqdata: str, user_agent: str = None, rqtoken: str = None):
     import requests as raw_req
+    task = {
+        "type": "HCaptchaTaskProxyless",
+        "websiteURL": "https://discord.com",
+        "websiteKey": sitekey,
+        "isInvisible": True,
+    }
+    if rqdata:
+        task["data"] = rqdata
+    if user_agent:
+        task["userAgent"] = user_agent
 
+    try:
+        res = raw_req.post(
+            "https://api.yescaptcha.com/createTask",
+            json={"clientKey": api_key, "task": task},
+            timeout=15
+        )
+        c_json = res.json()
+        if c_json.get("errorId") == 0 and c_json.get("taskId"):
+            task_id = c_json["taskId"]
+            print(f"  {Colors.CYAN}[*] YesCaptcha Task ID {task_id} queued. Polling solution...{Colors.RESET}")
+            for attempt in range(25):
+                time.sleep(3.5)
+                poll_res = raw_req.post(
+                    "https://api.yescaptcha.com/getTaskResult",
+                    json={"clientKey": api_key, "taskId": task_id},
+                    timeout=10
+                )
+                p_json = poll_res.json()
+                if p_json.get("status") == "ready":
+                    sol = p_json.get("solution", {})
+                    token = sol.get("gRecaptchaResponse") or sol.get("token")
+                    elapsed = int((attempt + 1) * 3.5)
+                    print(f"\n  {Colors.GREEN}{Colors.BOLD}[+] YesCaptcha successfully solved challenge in {elapsed}s!{Colors.RESET}")
+                    return token, rqtoken
+                elif p_json.get("errorId", 0) != 0:
+                    print(f"\n  {Colors.RED}[!] YesCaptcha error: {p_json.get('errorDescription')}{Colors.RESET}")
+                    break
+                sys.stdout.write(f"\r      Waiting for YesCaptcha solver... ({int((attempt + 1) * 3.5)}s)")
+                sys.stdout.flush()
+            print()
+        else:
+            print(f"  {Colors.RED}[!] YesCaptcha createTask error: {c_json.get('errorDescription')}{Colors.RESET}")
+    except Exception as e:
+        print(f"  {Colors.RED}[!] YesCaptcha connection error: {e}{Colors.RESET}")
+    return None, None
+
+def solve_capsolver(api_key: str, sitekey: str, rqdata: str, user_agent: str = None, rqtoken: str = None):
+    import requests as raw_req
+    task = {
+        "type": "HCaptchaTurboTask",
+        "websiteURL": "https://discord.com",
+        "websiteKey": sitekey,
+        "isInvisible": True,
+    }
+    if rqdata:
+        task["enterprisePayload"] = {"rqdata": rqdata}
+    if user_agent:
+        task["userAgent"] = user_agent
+
+    try:
+        res = raw_req.post(
+            "https://api.capsolver.com/createTask",
+            json={"clientKey": api_key, "task": task},
+            timeout=15
+        )
+        c_json = res.json()
+        if c_json.get("errorId") == 0 and c_json.get("taskId"):
+            task_id = c_json["taskId"]
+            print(f"  {Colors.CYAN}[*] CapSolver Task ID {task_id} queued. Polling solution...{Colors.RESET}")
+            for attempt in range(25):
+                time.sleep(2.5)
+                poll_res = raw_req.post(
+                    "https://api.capsolver.com/getTaskResult",
+                    json={"clientKey": api_key, "taskId": task_id},
+                    timeout=10
+                )
+                p_json = poll_res.json()
+                if p_json.get("status") == "ready":
+                    sol = p_json.get("solution", {})
+                    token = sol.get("gRecaptchaResponse") or sol.get("token")
+                    elapsed = int((attempt + 1) * 2.5)
+                    print(f"\n  {Colors.GREEN}{Colors.BOLD}[+] CapSolver successfully solved challenge in {elapsed}s!{Colors.RESET}")
+                    return token, rqtoken
+                elif p_json.get("errorId", 0) != 0:
+                    print(f"\n  {Colors.RED}[!] CapSolver error: {p_json.get('errorDescription')}{Colors.RESET}")
+                    break
+                sys.stdout.write(f"\r      Waiting for CapSolver solver... ({int((attempt + 1) * 2.5)}s)")
+                sys.stdout.flush()
+            print()
+        else:
+            print(f"  {Colors.RED}[!] CapSolver createTask error: {c_json.get('errorDescription')}{Colors.RESET}")
+    except Exception as e:
+        print(f"  {Colors.RED}[!] CapSolver connection error: {e}{Colors.RESET}")
+    return None, None
+
+def solve_anticaptcha(api_key: str, sitekey: str, rqdata: str, user_agent: str = None, rqtoken: str = None):
+    import requests as raw_req
+    task = {
+        "type": "HCaptchaTaskProxyless",
+        "websiteURL": "https://discord.com",
+        "websiteKey": sitekey,
+        "isInvisible": True,
+    }
+    if rqdata:
+        task["enterprisePayload"] = {"rqdata": rqdata}
+    if user_agent:
+        task["userAgent"] = user_agent
+
+    try:
+        res = raw_req.post(
+            "https://api.anti-captcha.com/createTask",
+            json={"clientKey": api_key, "task": task},
+            timeout=15
+        )
+        c_json = res.json()
+        if c_json.get("errorId") == 0 and c_json.get("taskId"):
+            task_id = c_json["taskId"]
+            print(f"  {Colors.CYAN}[*] Anti-Captcha Task ID {task_id} queued. Polling solution...{Colors.RESET}")
+            for attempt in range(24):
+                time.sleep(4)
+                poll_res = raw_req.post(
+                    "https://api.anti-captcha.com/getTaskResult",
+                    json={"clientKey": api_key, "taskId": task_id},
+                    timeout=10
+                )
+                p_json = poll_res.json()
+                if p_json.get("status") == "ready":
+                    sol = p_json.get("solution", {})
+                    token = sol.get("gRecaptchaResponse") or sol.get("token")
+                    elapsed = (attempt + 1) * 4
+                    print(f"\n  {Colors.GREEN}{Colors.BOLD}[+] Anti-Captcha successfully solved challenge in {elapsed}s!{Colors.RESET}")
+                    return token, rqtoken
+                elif p_json.get("errorId", 0) != 0:
+                    print(f"\n  {Colors.RED}[!] Anti-Captcha error: {p_json.get('errorDescription')}{Colors.RESET}")
+                    break
+                sys.stdout.write(f"\r      Waiting for Anti-Captcha solver... ({(attempt + 1) * 4}s)")
+                sys.stdout.flush()
+            print()
+        else:
+            print(f"  {Colors.RED}[!] Anti-Captcha createTask error: {c_json.get('errorDescription')}{Colors.RESET}")
+    except Exception as e:
+        print(f"  {Colors.RED}[!] Anti-Captcha connection error: {e}{Colors.RESET}")
+    return None, None
+
+def solve_2captcha(api_key: str, sitekey: str, rqdata: str, user_agent: str = None, rqtoken: str = None):
+    import requests as raw_req
     task = {
         "type": "HCaptchaTaskProxyless",
         "websiteURL": "https://discord.com",
@@ -582,7 +724,7 @@ def solve_discord_hcaptcha(captcha_details: dict, user_agent: str = None) -> tup
         if c_json.get("errorId") == 0 and c_json.get("taskId"):
             task_id = c_json["taskId"]
             print(f"  {Colors.CYAN}[*] 2Captcha Task ID {task_id} queued. Polling solution...{Colors.RESET}")
-            for attempt in range(24):  # up to 120s
+            for attempt in range(24):
                 time.sleep(5)
                 poll_res = raw_req.post(
                     "https://api.2captcha.com/getTaskResult",
@@ -593,7 +735,8 @@ def solve_discord_hcaptcha(captcha_details: dict, user_agent: str = None) -> tup
                 if p_json.get("status") == "ready":
                     sol = p_json.get("solution", {})
                     token = sol.get("token") or sol.get("gRecaptchaResponse")
-                    print(f"\n  {Colors.GREEN}{Colors.BOLD}[+] 2Captcha successfully solved challenge in {(attempt + 1) * 5}s!{Colors.RESET}")
+                    elapsed = (attempt + 1) * 5
+                    print(f"\n  {Colors.GREEN}{Colors.BOLD}[+] 2Captcha successfully solved challenge in {elapsed}s!{Colors.RESET}")
                     return token, rqtoken
                 elif p_json.get("errorId", 0) != 0:
                     print(f"\n  {Colors.RED}[!] 2Captcha error: {p_json.get('errorDescription')}{Colors.RESET}")
@@ -628,7 +771,8 @@ def solve_discord_hcaptcha(captcha_details: dict, user_agent: str = None) -> tup
                 res_resp = raw_req.get(res_url, timeout=10).json()
                 if res_resp.get("status") == 1:
                     token = res_resp.get("request")
-                    print(f"\n  {Colors.GREEN}{Colors.BOLD}[+] 2Captcha legacy solved challenge in {(attempt + 1) * 5}s!{Colors.RESET}")
+                    elapsed = (attempt + 1) * 5
+                    print(f"\n  {Colors.GREEN}{Colors.BOLD}[+] 2Captcha legacy solved challenge in {elapsed}s!{Colors.RESET}")
                     return token, rqtoken
                 elif res_resp.get("request") != "CAPCHA_NOT_READY":
                     print(f"\n  {Colors.RED}[!] 2Captcha error: {res_resp.get('request')}{Colors.RESET}")
@@ -641,15 +785,74 @@ def solve_discord_hcaptcha(captcha_details: dict, user_agent: str = None) -> tup
 
     return None, None
 
+def solve_discord_hcaptcha(captcha_details: dict, user_agent: str = None) -> tuple:
+    """
+    Intelligently routes Discord enterprise hCaptcha challenges to the configured
+    solver: YesCaptcha, CapSolver, 2Captcha, or Anti-Captcha.
+    Returns (captcha_key, captcha_rqtoken).
+    """
+    cfg = get_captcha_config()
+    service = cfg["service"]
+
+    sitekey = (
+        captcha_details.get("captcha_sitekey")
+        or captcha_details.get("sitekey")
+        or "4c672d35-0701-42b2-88c3-78380b0db560"
+    )
+    rqdata = captcha_details.get("captcha_rqdata") or captcha_details.get("rqdata")
+    rqtoken = captcha_details.get("captcha_rqtoken") or captcha_details.get("rqtoken")
+
+    print(f"  {Colors.YELLOW}[*] Discord Captcha challenge detected!{Colors.RESET}")
+    print(f"      Sitekey: {sitekey}")
+    if rqdata:
+        print(f"      Enterprise RQData payload detected: {rqdata[:20]}...")
+
+    # Determine execution order
+    solvers = []
+    if service == "yescaptcha" or (service == "auto" and cfg["yescaptcha_key"]):
+        solvers.append(("YesCaptcha", solve_yescaptcha, cfg["yescaptcha_key"]))
+    if service == "capsolver" or (service == "auto" and cfg["capsolver_key"]):
+        solvers.append(("CapSolver", solve_capsolver, cfg["capsolver_key"]))
+    if service == "anticaptcha" or (service == "auto" and cfg["anticaptcha_key"]):
+        solvers.append(("Anti-Captcha", solve_anticaptcha, cfg["anticaptcha_key"]))
+    if service == "2captcha" or (service == "auto" and cfg["2captcha_key"]):
+        solvers.append(("2Captcha", solve_2captcha, cfg["2captcha_key"]))
+
+    # If explicit service selected but not in list yet
+    if not solvers:
+        if cfg["yescaptcha_key"]:
+            solvers.append(("YesCaptcha", solve_yescaptcha, cfg["yescaptcha_key"]))
+        elif cfg["capsolver_key"]:
+            solvers.append(("CapSolver", solve_capsolver, cfg["capsolver_key"]))
+        elif cfg["2captcha_key"]:
+            solvers.append(("2Captcha", solve_2captcha, cfg["2captcha_key"]))
+        elif cfg["anticaptcha_key"]:
+            solvers.append(("Anti-Captcha", solve_anticaptcha, cfg["anticaptcha_key"]))
+
+    if not solvers:
+        print(f"  {Colors.RED}[!] No captcha solver API keys configured in config.json!{Colors.RESET}")
+        return None, None
+
+    for name, func, key in solvers:
+        if not key:
+            continue
+        print(f"  {Colors.CYAN}[*] Dispatching challenge to {name}...{Colors.RESET}")
+        token, rtoken = func(key, sitekey, rqdata, user_agent, rqtoken)
+        if token:
+            return token, rtoken
+        print(f"  {Colors.YELLOW}[!] {name} failed or returned empty token. Trying next provider if available...{Colors.RESET}")
+
+    return None, None
+
 
 def enroll_quest_with_captcha(client: StealthDiscordClient, quest_id: str):
-    """Enrolls in quest, automatically solving Discord hCaptcha via 2Captcha if challenged."""
+    """Enrolls in quest, automatically solving Discord hCaptcha via configured solver if challenged."""
     try:
         enroll_res = client.enroll_quest(quest_id)
         if isinstance(enroll_res, dict) and enroll_res.get("captcha_required"):
             c_token, c_rqtoken = solve_discord_hcaptcha(enroll_res.get("details", {}), getattr(client, "user_agent", None))
             if c_token:
-                print(f"  {Colors.YELLOW}[*] Re-submitting enrollment with 2Captcha token...{Colors.RESET}")
+                print(f"  {Colors.YELLOW}[*] Re-submitting enrollment with solved captcha token...{Colors.RESET}")
                 enroll_res = client.enroll_quest(quest_id, captcha_key=c_token, captcha_rqtoken=c_rqtoken)
 
         if isinstance(enroll_res, dict) and enroll_res.get("rate_limited"):
@@ -668,16 +871,16 @@ def enroll_quest_with_captcha(client: StealthDiscordClient, quest_id: str):
 
 
 def claim_quest_with_captcha(client: StealthDiscordClient, quest_id: str, reward_desc: str = "Reward"):
-    """Claims quest reward, automatically solving Discord hCaptcha via 2Captcha if challenged."""
+    """Claims quest reward, automatically solving Discord hCaptcha via configured solver if challenged."""
     print(f"  {Colors.YELLOW}[*] Claiming reward / Orbs...{Colors.RESET}")
     time.sleep(random.uniform(1.2, 2.5))  # Human click delay
     try:
         claim_res = client.claim_reward(quest_id)
         if isinstance(claim_res, dict) and claim_res.get("captcha_required"):
-            print(f"  {Colors.YELLOW}[*] Direct API claim requires captcha. Solving via 2Captcha...{Colors.RESET}")
+            print(f"  {Colors.YELLOW}[*] Direct API claim requires captcha. Solving challenge...{Colors.RESET}")
             c_token, c_rqtoken = solve_discord_hcaptcha(claim_res.get("details", {}), getattr(client, "user_agent", None))
             if c_token:
-                print(f"  {Colors.YELLOW}[*] Re-submitting claim with 2Captcha token...{Colors.RESET}")
+                print(f"  {Colors.YELLOW}[*] Re-submitting claim with solved captcha token...{Colors.RESET}")
                 claim_res = client.claim_reward(quest_id, captcha_key=c_token, captcha_rqtoken=c_rqtoken)
 
         if isinstance(claim_res, dict) and claim_res.get("captcha_required"):
@@ -1080,7 +1283,7 @@ def run_watcher(client: StealthDiscordClient, list_only: bool = False, max_ads: 
             cname = cq.get("config", {}).get("messages", {}).get("quest_name", "Quest")
             print(f"  ✓ {cname} (100% Complete)")
         if not list_only:
-            print(f"\n{Colors.YELLOW}[*] Auto-claiming {len(completed_unclaimed)} ready quest(s) via 2Captcha...{Colors.RESET}")
+            print(f"\n{Colors.YELLOW}[*] Auto-claiming {len(completed_unclaimed)} ready quest(s) via auto-captcha solver...{Colors.RESET}")
             for cq in completed_unclaimed:
                 cq_id = cq["id"]
                 cname = cq.get("config", {}).get("messages", {}).get("quest_name", "Quest")
