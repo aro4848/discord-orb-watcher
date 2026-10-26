@@ -182,14 +182,61 @@ def fetch_live_build_number():
     return 638651  # Reliable live fallback
 
 
-def load_token(cli_token=None):
-    """Retrieves token from CLI argument, config file, environment, or auto-detect."""
-    if cli_token:
-        return cli_token.strip()
+def _read_tokens_file(filepath: str) -> list:
+    tokens = []
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                match = re.search(r'[\w-]{24,28}\.[\w-]{6}\.[\w-]{27,38}', line)
+                if match:
+                    tokens.append(match.group(0))
+                else:
+                    parts = line.split(":")
+                    tokens.append(parts[-1].strip())
+    except Exception:
+        pass
+    return tokens
 
+
+def load_all_tokens(cli_token=None, tokens_file=None) -> list:
+    """
+    Retrieves all unique tokens from CLI argument, tokens.txt, config file,
+    environment, or local Discord desktop installations.
+    """
+    raw_tokens = []
+
+    # 1. CLI token or comma-separated list or file
+    if cli_token:
+        cli_token = cli_token.strip()
+        if os.path.exists(cli_token):
+            raw_tokens.extend(_read_tokens_file(cli_token))
+        elif "," in cli_token:
+            raw_tokens.extend([t.strip() for t in cli_token.split(",") if t.strip()])
+        else:
+            raw_tokens.append(cli_token)
+
+    # 2. tokens.txt
+    file_candidates = [
+        tokens_file if tokens_file else None,
+        "tokens.txt",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokens.txt")
+    ]
+    for fp in file_candidates:
+        if fp and os.path.exists(fp):
+            file_toks = _read_tokens_file(fp)
+            if file_toks:
+                raw_tokens.extend(file_toks)
+                break
+
+    # 3. Config JSON ("tokens" array, "token", "user_token", or "accounts")
     candidates = [
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILE),
         r"C:\Users\PC\Desktop\Discord id scraper\config.json",
+        "config.json",
         CONFIG_FILE
     ]
     for c_path in candidates:
@@ -197,42 +244,72 @@ def load_token(cli_token=None):
             try:
                 with open(c_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-                    tok = cfg.get("user_token") or cfg.get("token")
-                    if tok:
-                        return tok.strip()
+                    if isinstance(cfg.get("tokens"), list):
+                        raw_tokens.extend([str(t).strip() for t in cfg["tokens"] if str(t).strip()])
+                    if isinstance(cfg.get("accounts"), list):
+                        for acc in cfg["accounts"]:
+                            if isinstance(acc, dict) and acc.get("token"):
+                                raw_tokens.append(str(acc["token"]).strip())
+                            elif isinstance(acc, str):
+                                raw_tokens.append(acc.strip())
+                    single = cfg.get("user_token") or cfg.get("token")
+                    if single:
+                        raw_tokens.append(str(single).strip())
             except Exception:
                 pass
 
+    # 4. Environment
+    env_tokens = os.getenv("DISCORD_TOKENS")
+    if env_tokens:
+        raw_tokens.extend([t.strip() for t in env_tokens.split(",") if t.strip()])
     env_tok = os.getenv("DISCORD_TOKEN")
     if env_tok:
-        return env_tok.strip()
+        raw_tokens.append(env_tok.strip())
 
-    print(f"{Colors.YELLOW}[*] Auto-detecting token from local Discord installation...{Colors.RESET}")
-    detected = find_discord_tokens()
-    if detected:
-        tok = detected[0]
-        print(f"{Colors.GREEN}[+] Found active Discord desktop session!{Colors.RESET}")
+    # 5. Local Discord installation auto-detect
+    if not raw_tokens:
+        print(f"{Colors.YELLOW}[*] Auto-detecting tokens from local Discord installations...{Colors.RESET}")
+        detected = find_discord_tokens()
+        if detected:
+            raw_tokens.extend(detected)
+            print(f"{Colors.GREEN}[+] Found {len(detected)} active Discord desktop session(s)!{Colors.RESET}")
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_tokens = []
+    for t in raw_tokens:
+        cleaned = t.strip().strip('"').strip("'")
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            unique_tokens.append(cleaned)
+
+    # If still none, prompt
+    if not unique_tokens:
+        print(f"{Colors.RED}[!] Could not auto-detect active Discord session.{Colors.RESET}")
         try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump({"token": tok}, f, indent=2)
-        except Exception:
-            pass
-        return tok
+            user_input = input("Enter your Discord User Token (or multiple separated by comma): ").strip()
+            if user_input:
+                for t in user_input.split(","):
+                    t_clean = t.strip()
+                    if t_clean and t_clean not in seen:
+                        seen.add(t_clean)
+                        unique_tokens.append(t_clean)
+                try:
+                    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                        json.dump({"token": unique_tokens[0], "tokens": unique_tokens}, f, indent=2)
+                except Exception:
+                    pass
+        except KeyboardInterrupt:
+            sys.exit(0)
 
-    print(f"{Colors.RED}[!] Could not auto-detect active Discord session.{Colors.RESET}")
-    try:
-        user_input = input("Enter your Discord User Token: ").strip()
-        if user_input:
-            try:
-                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump({"token": user_input}, f, indent=2)
-            except Exception:
-                pass
-            return user_input
-    except KeyboardInterrupt:
-        sys.exit(0)
+    return unique_tokens
 
-    return None
+
+def load_token(cli_token=None):
+    """Retrieves single token for backwards-compatibility."""
+    tokens = load_all_tokens(cli_token)
+    return tokens[0] if tokens else None
+
 
 
 class GatewaySession:
@@ -1376,6 +1453,8 @@ def show_claimed_history(client: StealthDiscordClient):
 def main():
     parser = argparse.ArgumentParser(description="Watch Discord Orb/Video Ads Headless via Stealth API")
     parser.add_argument("--token", "-t", type=str, help="Discord User Authorization Token")
+    parser.add_argument("--tokens", type=str, help="Comma-separated tokens or path to tokens.txt")
+    parser.add_argument("--tokens-file", type=str, default=None, help="Path to tokens file (default: tokens.txt)")
     parser.add_argument("--loop", "-l", action="store_true", help="Run continuously in the background")
     parser.add_argument("--interval", "-i", type=int, default=3600, help="Check interval in seconds for loop mode (default: 3600s)")
     parser.add_argument("--limit", "-m", type=int, default=0, help="Max quests to process in one run (default: 0 = all)")
@@ -1386,7 +1465,6 @@ def main():
 
     print_banner()
 
-    # Determine batch limit and mode (Default: ALL quests, unlimited)
     effective_limit = args.limit
     if args.video_only:
         mode = "video"
@@ -1395,51 +1473,57 @@ def main():
     else:
         mode = "all"
 
-    # 1. Retrieve token
-    token = load_token(args.token)
-    if not token:
-        print(f"{Colors.RED}[!] Error: No Discord token provided. Exiting.{Colors.RESET}")
+    # 1. Retrieve all tokens
+    cli_tok = args.token or args.tokens
+    tokens = load_all_tokens(cli_token=cli_tok, tokens_file=args.tokens_file)
+    if not tokens:
+        print(f"{Colors.RED}[!] Error: No Discord token(s) provided or found. Exiting.{Colors.RESET}")
         sys.exit(1)
 
-    # 2. Initialize Stealth Client
-    client = StealthDiscordClient(token)
-    print(f"{Colors.DIM}[i] Detected Discord Desktop Version: {client.client_version} (Build: {client.build_number}){Colors.RESET}")
+    print(f"{Colors.GREEN}[+] Loaded {len(tokens)} account(s) to process.{Colors.RESET}")
 
-    # 3. Validate Token
-    try:
-        user = client.get_user_profile()
-        username = user.get("username")
-        display_name = user.get("global_name") or username
-        user_id = user.get("id")
-        print(f"{Colors.GREEN}[+] Authenticated as: {Colors.BOLD}{display_name}{Colors.RESET} (@{username}, ID: {user_id})")
-    except Exception as e:
-        print(f"{Colors.RED}[!] Authentication failed: {e}{Colors.RESET}")
-        sys.exit(1)
+    for idx, token in enumerate(tokens, start=1):
+        print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*60}")
+        print(f" >>> Processing Account [{idx}/{len(tokens)}] <<<")
+        print(f"{'='*60}{Colors.RESET}")
 
-    # 4. Connect to Gateway
-    client.start_gateway()
+        client = None
+        try:
+            client = StealthDiscordClient(token)
+            print(f"{Colors.DIM}[i] Detected Discord Desktop Version: {client.client_version} (Build: {client.build_number}){Colors.RESET}")
+            user = client.get_user_profile()
+            username = user.get("username")
+            display_name = user.get("global_name") or username
+            user_id = user.get("id")
+            print(f"{Colors.GREEN}[+] Authenticated as: {Colors.BOLD}{display_name}{Colors.RESET} (@{username}, ID: {user_id})")
 
-    try:
-        if args.list:
-            run_watcher(client, list_only=True, mode=mode)
-            show_claimed_history(client)
-            return
+            client.start_gateway()
 
-        if args.loop:
-            print(f"\n{Colors.CYAN}[*] Starting background watch mode (Interval: {args.interval}s / {args.interval//60}m)...{Colors.RESET}")
-            print(f"{Colors.DIM}Press Ctrl+C at any time to exit.{Colors.RESET}")
-            try:
-                while True:
-                    run_watcher(client, max_ads=effective_limit, mode=mode)
-                    print(f"\n{Colors.DIM}Sleeping for {args.interval}s until next check...{Colors.RESET}")
-                    time.sleep(args.interval)
-            except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}[*] Watcher stopped by user. Goodbye!{Colors.RESET}")
-        else:
-            run_watcher(client, max_ads=effective_limit, mode=mode)
-            print(f"\n{Colors.GREEN}[✔] Run complete.{Colors.RESET}")
-    finally:
-        client.close()
+            if args.list:
+                run_watcher(client, list_only=True, mode=mode)
+                show_claimed_history(client)
+            elif args.loop:
+                print(f"\n{Colors.CYAN}[*] Running loop mode for account {idx}...{Colors.RESET}")
+                run_watcher(client, max_ads=effective_limit, mode=mode)
+            else:
+                run_watcher(client, max_ads=effective_limit, mode=mode)
+                print(f"{Colors.GREEN}[✔] Account [{idx}/{len(tokens)}] finished successfully.{Colors.RESET}")
+        except Exception as e:
+            print(f"{Colors.RED}[!] Error processing account {idx}: {e}{Colors.RESET}")
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+        if idx < len(tokens):
+            cooldown = random.uniform(3.0, 6.0)
+            print(f"{Colors.DIM}[*] Pausing {cooldown:.1f}s before next account...{Colors.RESET}")
+            time.sleep(cooldown)
+
+    print(f"\n{Colors.GREEN}{Colors.BOLD}[✔] All {len(tokens)} account(s) processed.{Colors.RESET}")
+
 
 
 batch_watch_all_videos = run_watcher

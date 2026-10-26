@@ -1,0 +1,6 @@
+# Paste your Discord user tokens below (one per line)
+# Blank lines and lines starting with # are ignored.
+# Supports raw tokens or email:pass:token formats.
+
+# YOUR_TOKEN_1_HERE
+# YOUR_TOKEN_2_HERE

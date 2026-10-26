@@ -96,6 +96,21 @@ if discord challenges your account with an enterprise hCaptcha during quest enro
 - **safe**: 100% safe — zero tokens, passwords, or account info are ever sent to the captcha provider. only the public sitekey and dynamic challenge payload (`rqdata`) are dispatched.
 - **auto routing**: set `"captcha_service": "auto"` and paste whichever key you have. it will auto-detect and use your active provider.
 
+### multi-account support
+
+run as many accounts as you want back-to-back:
+
+- **tokens.txt**: create a `tokens.txt` file in the folder with one token per line (see `tokens.example.txt`).
+- **config.json**: add `"tokens": ["TOKEN_1", "TOKEN_2", ...]`
+- **cli flags**:
+  ```bash
+  python main.py --tokens "TOKEN1,TOKEN2" --all
+  # or
+  python main.py --tokens-file tokens.txt --headless
+  ```
+
+the engine cycles through every account, opens genuine gateway presence, auto-finishes/claims all quests, applies humanized pauses between accounts, and shuts down cleanly.
+
 ### disclaimer
 
 i (aro4848) dont give a fuck if something happens to ur account. selfbotting quests is against discord TOS, so dont cry if discord gets mad. use an alt if you're paranoid. if you need help msg me on discord: **aro22**

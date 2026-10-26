@@ -8,5 +8,6 @@ venv/
 ENV/
 config.json
 orb_config.json
+tokens.txt
 *.log
 temp_user_data*/

@@ -177,53 +177,31 @@ def load_config():
             return {}
     return {}
 
-def get_working_token(dow):
-    """Loads configured token or auto-detects active token from Discord desktop."""
-    config = load_config()
-    token = config.get("user_token") or config.get("token")
-    if token:
+def get_working_tokens(dow):
+    """Loads all configured tokens or auto-detects active tokens from Discord desktop."""
+    all_tokens = dow.load_all_tokens() if hasattr(dow, "load_all_tokens") else [dow.load_token()]
+    valid_tokens = []
+    print(f"{Fore.CYAN}[*] Validating session(s)...{Fore.RESET}")
+    for tok in all_tokens:
         try:
-            c = dow.StealthDiscordClient(token)
+            c = dow.StealthDiscordClient(tok)
             r = c.session.get("https://discord.com/api/v9/users/@me")
             if r.status_code == 200:
                 u = r.json()
-                print(f"{Fore.GREEN}[+] Active session: {Fore.WHITE}{u.get('username')} ({u.get('id')}){Fore.RESET}")
-                return token
+                print(f"{Fore.GREEN}[+] Valid session: {Fore.WHITE}{u.get('username')}{Fore.RESET} ({u.get('id')})")
+                valid_tokens.append(tok)
             else:
-                print(f"{Fore.YELLOW}[!] Configured token is expired (HTTP {r.status_code}). Auto-detecting live session...{Fore.RESET}")
+                print(f"{Fore.YELLOW}[!] Token expired (HTTP {r.status_code}), skipping...{Fore.RESET}")
         except Exception:
-            pass
+            continue
+    return valid_tokens
 
-    print(f"{Fore.CYAN}[*] Scanning local Discord desktop for active session...{Fore.RESET}")
-    try:
-        tokens = dow.find_discord_tokens()
-        for tok in tokens:
-            try:
-                c = dow.StealthDiscordClient(tok)
-                r = c.session.get("https://discord.com/api/v9/users/@me")
-                if r.status_code == 200:
-                    u = r.json()
-                    print(f"{Fore.GREEN}[+] Found valid session for {Fore.WHITE}{u.get('username')}{Fore.RESET}")
-                    # Save back to config.json
-                    base_dir = os.path.dirname(os.path.abspath(__file__))
-                    cfg_path = os.path.join(base_dir, CONFIG_FILE)
-                    try:
-                        with open(cfg_path, "r", encoding="utf-8") as f:
-                            cfg_data = json.load(f)
-                        cfg_data["token"] = tok
-                        cfg_data["user_token"] = tok
-                        with open(cfg_path, "w", encoding="utf-8") as f:
-                            json.dump(cfg_data, f, indent=4)
-                    except Exception:
-                        pass
-                    return tok
-            except Exception:
-                continue
-    except Exception as e:
-        print(f"{Fore.RED}[!] Auto-detection error: {e}{Fore.RESET}")
 
-    token = input(f"\n{Fore.YELLOW}Enter your Discord user token: {Fore.WHITE}").strip()
-    return token
+def get_working_token(dow):
+    toks = get_working_tokens(dow)
+    return toks[0] if toks else None
+
+
 
 def run_quest_watcher(update_status_func=None):
     if update_status_func:
@@ -284,38 +262,53 @@ def run_quest_watcher(update_status_func=None):
                 print(f"{Fore.RED}[!] Error loading quest engine: {e}{Fore.RESET}")
                 continue
 
-            token = get_working_token(dow)
-            if not token:
+            tokens = get_working_tokens(dow)
+            if not tokens:
                 print(f"{Fore.RED}[!] No valid token available. Aborting.{Fore.RESET}")
                 continue
 
-            print(f"{Fore.CYAN}[*] Initializing stealth client & inspecting quests...{Fore.RESET}")
-            client = None
-            try:
-                client = dow.StealthDiscordClient(token)
-                client.start_gateway()
+            print(f"\n{Fore.GREEN}[+] Loaded {len(tokens)} account(s) to process.{Fore.RESET}")
 
-                if choice == "1":
-                    print(f"{Fore.GREEN}[*] Starting Video/Ad Quest Watcher...{Fore.RESET}")
-                    dow.run_watcher(client, max_ads=0, mode="video", list_only=False)
-                elif choice == "2":
-                    print(f"{Fore.GREEN}[*] Starting Desktop Game Quest Simulator...{Fore.RESET}")
-                    dow.run_watcher(client, max_ads=0, mode="game", list_only=False)
-                elif choice == "3":
-                    print(f"{Fore.GREEN}[*] Processing All Active Quests...{Fore.RESET}")
-                    dow.run_watcher(client, max_ads=0, mode="all", list_only=False)
-                elif choice == "4":
-                    dow.run_watcher(client, list_only=True)
-                    dow.show_claimed_history(client)
-                elif choice == "5":
-                    dow.show_claimed_history(client)
+            for a_idx, token in enumerate(tokens, start=1):
+                if len(tokens) > 1:
+                    print(f"\n{Fore.CYAN}{'='*50}")
+                    print(f"{Fore.YELLOW}>>> Processing Account [{a_idx}/{len(tokens)}] <<<{Fore.RESET}")
+                    print(f"{Fore.CYAN}{'='*50}{Fore.RESET}")
 
-            finally:
-                if client:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
+                client = None
+                try:
+                    client = dow.StealthDiscordClient(token)
+                    client.start_gateway()
+
+                    if choice == "1":
+                        print(f"{Fore.GREEN}[*] Starting Video/Ad Quest Watcher...{Fore.RESET}")
+                        dow.run_watcher(client, max_ads=0, mode="video", list_only=False)
+                    elif choice == "2":
+                        print(f"{Fore.GREEN}[*] Starting Desktop Game Quest Simulator...{Fore.RESET}")
+                        dow.run_watcher(client, max_ads=0, mode="game", list_only=False)
+                    elif choice == "3":
+                        print(f"{Fore.GREEN}[*] Processing All Active Quests...{Fore.RESET}")
+                        dow.run_watcher(client, max_ads=0, mode="all", list_only=False)
+                    elif choice == "4":
+                        dow.run_watcher(client, list_only=True)
+                        dow.show_claimed_history(client)
+                    elif choice == "5":
+                        dow.show_claimed_history(client)
+
+                    if len(tokens) > 1 and choice not in ("4", "5"):
+                        print(f"{Fore.GREEN}[✔] Account [{a_idx}/{len(tokens)}] completed successfully.{Fore.RESET}")
+
+                except Exception as acc_e:
+                    print(f"{Fore.RED}[!] Error processing account {a_idx}: {acc_e}{Fore.RESET}")
+                finally:
+                    if client:
+                        try:
+                            client.close()
+                        except Exception:
+                            pass
+
+                if a_idx < len(tokens):
+                    time.sleep(3)
 
         except Exception as e:
             print(f"\n{Fore.RED}[!] Quest engine error: {e}{Fore.RESET}")

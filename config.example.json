@@ -1,5 +1,9 @@
 {
   "token": "YOUR_DISCORD_USER_TOKEN_HERE",
+  "tokens": [
+    "YOUR_FIRST_TOKEN_HERE",
+    "YOUR_SECOND_TOKEN_HERE"
+  ],
   "auto_claim": true,
   "simulate_cdn_buffer": true,
   "captcha_service": "auto",

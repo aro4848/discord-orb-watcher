@@ -24,6 +24,8 @@ if sys.platform == "win32":
 def main():
     parser = argparse.ArgumentParser(description="Discord Orb & Quest Auto-Watcher")
     parser.add_argument("--token", "-t", type=str, help="Discord user token (optional, auto-detected if omitted)")
+    parser.add_argument("--tokens", type=str, help="Comma-separated tokens or path to tokens.txt (multi-account)")
+    parser.add_argument("--tokens-file", type=str, default=None, help="Path to tokens file (default: tokens.txt)")
     parser.add_argument("--headless", action="store_true", help="Run without interactive menu (auto-completes all video/ad quests)")
     parser.add_argument("--all", action="store_true", help="Auto-complete both video ad and desktop game quests")
     parser.add_argument("--list", action="store_true", help="List all available & active quests and exit")
@@ -36,6 +38,10 @@ def main():
         sys.argv = [sys.argv[0]]
         if args.token:
             sys.argv.extend(["--token", args.token])
+        if args.tokens:
+            sys.argv.extend(["--tokens", args.tokens])
+        if args.tokens_file:
+            sys.argv.extend(["--tokens-file", args.tokens_file])
         if args.all:
             sys.argv.append("--all")
         if args.list:
